@@ -761,10 +761,8 @@ window.addEventListener('message', (event) => {
 我们热情欢迎所有开发者和用户加入我们的社区！在这里，你可以自由提问、分享经验、贡献代码，共同推动项目的发展。
 
 <div align="center">
-
-微信交流群
 <img src=".github/images/微信交流.jpg" width="300">
-
+<p align="center">加入微信交流群</p>
 </div>
 
 **更多链接:**
