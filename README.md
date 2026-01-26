@@ -764,7 +764,6 @@ window.addEventListener('message', (event) => {
 
 微信交流群
 <img src=".github/images/微信交流.jpg" width="300">
-扫码加入微信技术交流群
 
 </div>
 
