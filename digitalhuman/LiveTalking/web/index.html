@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <style>
+        *{
+            margin: 0;
+            padding: 0;
+        }
+        html,
+        body{
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+        body{
+            background-image:  url("https://minio.xyabcd.com/media/databg.png");
+            background-size: 100%;
+        }
+        #video, #audio, #canvas{
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        #video{
+            visibility: hidden;
+            height: 100%;
+        }
+        #audio{
+            width: 0;
+            height: 0;
+        }
+        #canvas{
+            width: 100%;
+            height: 100%;
+        }
+        .send-box{
+            display: none;
+            position: fixed;
+            left: 5%;
+            bottom: 20px;
+            width: 80%;
+            height: 60px;
+        }
+        .send-box input{
+            flex: 1;
+            height: 100%;
+            padding: 0 10px;
+            font-size: 16px;
+            color: #333;
+            border-color: #5cb87a;
+            background-color: #def0e4;
+            border-radius: 10px;
+            box-sizing: border-box;
+            outline: none;
+        }
+        .send-box button{
+            min-width: 100px;
+            height: 100%;
+            margin-left: 10px;
+            font-size: 16px;
+            letter-spacing: 4px;
+            color: #fff;
+            font-weight: 600;
+            border: none;
+            background-color: #5cb87a;
+            border-radius: 10px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <video id="video" autoplay muted playsinline></video>
+    <audio id="audio" autoplay="true"></audio>
+    <canvas id="canvas"></canvas>
+    <div class="send-box">
+        <input type="text">
+        <button>发送</button>
+    </div>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+
+        let pc = null;
+        let sessionid = null;
+        const avatar_id = params.get('avatar_id') || 'girl';
+        const voice = params.get('voice') || 'zh-CN-XiaoxiaoNeural';
+
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const sendBox = document.querySelector('.send-box');
+
+        initPC();
+        function initPC() {
+            // 1. 定义 ICE 服务器配置（无需额外导入，WebRTC 原生支持）
+            const iceServers = [
+                // TURN 服务器 - 用于严格NAT环境
+                {
+                    urls: "turn:116.62.54.72:3478?transport=tcp",
+                    username: "admin",
+                    credential: "123456"
+                }
+            ];
+
+            // 2. 创建配置对象（直接使用原生配置结构，无需自定义类）
+            const config = {
+                iceServers: iceServers,
+                sdpSemantics: 'unified-plan'
+            };
+            pc = new RTCPeerConnection(config);
+
+            pc.addEventListener('track', (evt) => {
+                if (evt.track.kind == 'video') {
+                    document.getElementById('video').srcObject = evt.streams[0];
+                } else {
+                    document.getElementById('audio').srcObject = evt.streams[0];
+                }
+            });
+
+            pc.addTransceiver('video', { direction: 'recvonly' });
+            pc.addTransceiver('audio', { direction: 'recvonly' });
+
+            createOffer();
+        };
+
+        function createOffer() {
+            pc.createOffer()
+            .then(offer => pc.setLocalDescription(offer))
+            .then(() => {
+                return new Promise((resolve) => {
+                    if (pc.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        const checkState = () => {
+                            if (pc.iceGatheringState === 'complete') {
+                                pc.removeEventListener('icegatheringstatechange', checkState);
+                                resolve();
+                            }
+                        };
+                        pc.addEventListener('icegatheringstatechange', checkState);
+                    }
+                })
+            })
+            .then(() => {
+                const offer = pc.localDescription;
+                return fetch('/offer', {
+                    body: JSON.stringify({
+                        sdp: offer.sdp,
+                        type: offer.type,
+                        avatar_id: avatar_id,
+                        opt: {
+                            voice: voice
+                        }
+                    }),
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    method: 'POST'
+                });
+            })
+            .then(response => response.json())
+            .then(answer => {
+                sessionid = answer.sessionid;
+                sendBox.style.display = 'flex';
+                return pc.setRemoteDescription(answer);
+            })
+            .catch(err => alert(err + ''));
+        };
+        
+        video.addEventListener('loadeddata', function() {
+            const { clientWidth: _v_W, clientHeight: _v_H } = video;
+            const { clientWidth: _c_W, clientHeight: _c_H } = canvas;
+            const ctx = canvas.getContext('2d');
+
+            const pixelRatio = 3;
+            const v_W = _v_W * pixelRatio;
+            const v_H = _v_H * pixelRatio;
+            const c_W = _c_W * pixelRatio;
+            const c_H = _c_H * pixelRatio;
+
+            canvas.width = c_W;
+            canvas.height = c_H; 
+
+            video.addEventListener('timeupdate', function() {
+                ctx.clearRect(0, 0, c_W, c_H);
+                // ctx.drawImage(video, 0, (c_H - v_H) / 2, v_W, v_H);
+                // ctx.drawImage(video, (c_W - v_W) / 2, 0, v_W, v_H);
+                ctx.drawImage(video, c_W - v_W * .5, c_H - v_H * .5, v_W * .5, v_H * .5);
+                //背景透明 
+                const imageData = ctx.getImageData(0, 0, c_W, c_H);
+                const data = imageData.data;
+                for (let i = 0; i < data.length; i += 4) {
+                    const r = data[i];
+                    const g = data[i + 1];
+                    const b = data[i + 2];
+
+                    if (g > r + 30 && g > b + 30 && g > 100) {
+                        data[i + 3] = 0;
+                    }
+                }
+                
+                ctx.putImageData(imageData, 0, 0);
+
+            });
+        });
+
+        sendBox.querySelector('button').addEventListener('click', () => {
+            const input = sendBox.querySelector('input');
+            const message = input.value.trim();
+            if(!message) return alert('请输入内容');
+            document.getElementById('audio').play();
+            sendMessage(message, ([err, res]) => {
+                if(!err) input.value = '';
+            });
+        });
+
+        function sendMessage(message, callback) {
+            fetch('/human', {
+                body: JSON.stringify({
+                    text: message,
+                    type: 'echo',
+                    interrupt: true,
+                    sessionid: sessionid
+                }),
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                method: 'POST'
+            })
+            .then(res => callback([null, res]))
+            .catch(err => callback([err]));
+        };
+
+        window.addEventListener('unload', function() {
+            pc && pc.close();
+        });
+
+        window.addEventListener('beforeunload', function() {
+            pc && pc.close();
+        });
+    </script>
+</body>
+</html>
