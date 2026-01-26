@@ -1,0 +1,7 @@
+node_modules
+dist
+.git
+*.log
+*.md
+test
+__tests__
