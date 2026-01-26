@@ -762,10 +762,9 @@ window.addEventListener('message', (event) => {
 
 <div align="center">
 
-| 微信交流群 | &nbsp;&nbsp;&nbsp;&nbsp; | QQ 交流群 |
-|:--:|:--:|:--:|
-| <img src=".github/images/二维码.png" width="160"> | &nbsp;&nbsp; | <img src=".github/images/二维码.png" width="160"> |
-| 扫码加入微信技术交流群 | &nbsp;&nbsp; | 扫码或搜索群号 `123456789` 加入 |
+微信交流群
+<img src=".github/images/微信交流.jpg" width="300">
+扫码加入微信技术交流群
 
 </div>
 
@@ -773,5 +772,5 @@ window.addEventListener('message', (event) => {
 
 - **报告问题与建议 (Issues):** 前往 [GitHub Issues](https://github.com/winyeahs/agenta/issues) 提交您发现的 Bug 或功能建议。
 - **参与讨论 (Discussions):** 加入我们的 [GitHub Discussions](https://github.com/winyeahs/agenta/discussions) 进行更深入的技术探讨和想法交流。
-- **联系我们 (Contact):** 如有商务合作或其他事宜，请发送邮件至 `[your-official-email@example.com]`。
+- **联系我们 (Contact):** 如有商务合作或其他事宜，请发送邮件至 `93634776@qq.com`。
 
