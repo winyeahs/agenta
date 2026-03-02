@@ -290,174 +290,476 @@ MCP (Model Context Protocol) 是一个标准的工具调用协议，允许 Agent
 
 | 配置项 | 说明 | 示例 |
 |--------|------|------|
-| **WebSocket地址** | Socket.IO服务地址 | `ws://127.0.0.1:5001` |
-| **数字人地址** | 数字人服务API（可选） | `https://dh.example.com/api/digitalhuman-chat` |
-| **聊天框地址** | 前端聊天界面（可选） | `https://chat.example.com/chat` |
+| **WebSocket地址** | Socket.IO服务地址 | `https://dh.example.com:5001` |
+| **数字人地址** | 数字人iframe地址（可选） | `https://dh.example.com/digitalhuman/628d9cfa1d6047549baead18dd81490` |
+| **聊天框地址** | 前端聊天界面iframe地址（可选） | `https://dh.example.com/chat/628d9cfa1d6047549baead18dd81490` |
 
 ### 调用流程
 
-#### 系统交互流程
+#### 1、 初始化连接流程
 
 ```mermaid
 sequenceDiagram
-    participant F as 外部系统
-    participant WS as WebSocket管理器
-    participant A as Agent系统
-    
-    Note over F,A: 连接初始化阶段
-    
-    F->>+WS: 建立连接
-    WS-->>-F: 连接成功
-    
-    F->>+WS: 发送当前系统数据
-    WS->>+A: 保存数据
-    A-->>-WS: 保存成功
-    WS-->>-F: 确认响应
-    
-    Note over F,A: 页面跳转/数据增删改查操作
-    
-    F->>+WS: 用户请求
-    WS->>+A: 转发请求
-    
-    alt 需要等待响应(查询/增删改)
-        A->>WS: 发送操作消息(带wait_id)
-        WS-->>F: 转发消息
+    participant M as 主系统
+    participant S as Socket Manager
+    participant AI as Agent 后端
+    participant I as 聊天框/数字人 Iframe
+
+    M->>S: 1. 登录后调用 initSocket()
+    S->>AI: 2. 建立 Socket.IO 连接
+    AI-->>S: 3. connect 事件
+    S->>M: 4. 保存收到的 socketId
+
+    S->>AI: 5. emit('systemdata', {name, userinfo, pages})
+    Note over AI: 6. 发送系统配置信息，包括系统页面结构<br/>用于Agent对系统功能的感知
+
+    I->>M: 7. postMessage('REQUEST_SOCKET_DATA')，请求socketId信息
+    M->>I: 8. postMessage('SOCKET_READY', {socketId})
+
+    Note over I: 9. iframe 可以使用socketId <br/>与Agent后端进行绑定
+```
+
+#### 2、 用户发起请求流程
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant I as Iframe<br/>(聊天框/数字人)
+    participant S as Socket Manager
+    participant E as Event Bus
+    participant Page as 页面组件
+    participant AI as Agent 后端
+
+    U->>I: 1. 输入问题/语音
+    I->>AI: 2. 发送消息
+    Note over AI: 3. LLM 处理<br/>意图识别<br/>生成操作指令
+    AI->>S: 4. emit('message', {action, payload, wait_id})
+    S->>S: 5. handleMessage()
+
+    alt action === 'router'
+        S->>S: 6a. handleRouter()
+        S->>Page: 7a. 路由跳转
+        S->>S: 8a. waitForPageReady() 检查页面路由跳转状态
+
+        alt 数字人模式 router跳转同时触发query请求页面数据
+            S->>E: 9a. emitAgentEvent('Agent:message', query)
+            E->>Page: 10a. 触发查询
+            Page->>Page: 11a. 执行查询
+            Page->>S: 12a. sendAgentResponse(wait_id, data)
+        end
+            S->>AI: 9b. sendAgentResponse(wait_id, success)
         
-        Note over F: 执行操作
-        
-        F->>WS: 反馈结果
-        WS->>A: 设置响应数据
-        
-        Note over A: 处理响应数据
-        
-        A-->>WS: 返回最终结果
-        WS-->>F: 确认收到
-    else 仅跳转(无需等待)
-        A->>WS: 发送跳转消息
-        WS-->>F: 转发消息
-        Note over F: 执行页面跳转
+    else 其他 action
+        alt 当前页面与需要操作的页面路由不匹配时，先跳转页面
+            S->>S: 6b. handleRouteNavigation()
+            S->>Page: 7b. 自动跳转到目标页面
+            S->>S: 8b. waitForPageReady()
+        end
+
+        S->>E: 9c. emitAgentEvent('Agent:message', data) 其他action分给对应页面操作
+        E->>Page: 10c. 页面接收消息
+        Page->>Page: 11c. 过滤 & 执行操作
+        Page->>S: 12c. sendAgentResponse(wait_id, result) 返回结果
     end
-    
-    A-->>-WS: 处理完成
-    WS-->>-F: 返回结果
+
+    S->>AI: 13. emit('agent_response', {wait_id, response_data}) 发送操作结果
+    Note over AI: 14. 处理结果<br/>生成回复
+    AI->>I: 15. 发送回复给 iframe
+    I->>U: 16. 显示结果
 ```
 
 ### 调用说明
 
-#### 1、初始化，建立连接
+#### 1、socket初始化，建立连接并发送系统配置数据
 
 ```javascript
-import io from "socket.io-client";  // 使用 socket.io-client 库
+import { io } from 'socket.io-client';
 
-// 连接 WebSocket
-const socket = io("127.0.0.1:5001");  //使用配置的WebSocket地址
-window.socket = socket;
-```
+// 页面配置示例（需要根据实际业务定义）
+const pageConfigs = [
+  {
+    code: 'dashboard',
+    name: '仪表盘',
+    description: '系统概览',
+    actions: ['router', 'query']
+  },
+  // ... 更多页面配置
+];
 
-#### 2、连接回调
+// 用户信息（通常从状态管理或登录信息中获取）
+let userInfo = {
+  userId: 'user123',
+  username: '张三',
+  systemName: '系统名称',
+  websocketUrl: 'ws://your-server-url'
+};
 
-```javascript
-//初始化连接成功处理
-socket.on("connect", () => {
-  console.log("连接成功");
+// 创建 Socket 连接
+const socket = io(userInfo.websocketUrl, {
+  transports: ['websocket', 'polling'],
+  reconnection: true,
+  reconnectionAttempts: 5,
+  reconnectionDelay: 3000,
+  timeout: 10000
+});
+
+// 监听连接成功事件
+socket.on('connect', () => {
+  console.log('Socket 连接成功，ID:', socket.id);
   
-  // 外部系统回传系统配置数据，用于区分系统信息
-  socket.emit("systemdata", {
-    name: "系统名称",
+  // 保存 socketId 信息，用于后续绑定聊天框/数字人iframe（实际项目中应保存到状态管理如 Pinia/Vuex）
+  userInfo.socketId = socket.id;
+  console.log('Socket ID 已保存:', userInfo.socketId);
+  
+  // 发送系统配置数据
+  const systemData = {
+    name: userInfo.systemName,
     userinfo: {
-      destination_id: "目的地ID"
+      destination_id: userInfo.userId,
+      user_id: userInfo.userId,
+      username: userInfo.username
     },
-    type: "page_module",
-    description: "系统描述",
-    pages: [/* 回传可操作的页面配置数组 */]
-  });
+    type: 'page_module',
+    description: userInfo.systemName,
+    pages: pageConfigs
+  };
+  
+  socket.emit('systemdata', systemData);
+  console.log('系统配置数据已发送');
 });
 
-//初始化连接错误处理
-socket.on("connect_error", (err) => {
-  console.log("连接错误:", err);
+// 监听连接错误
+socket.on('connect_error', (error) => {
+  console.error('连接错误:', error.message);
 });
 
-socket.on("disconnect", () => {
-  console.log("连接断开");
+// 监听断开连接
+socket.on('disconnect', (reason) => {
+  console.warn('连接已断开:', reason);
+  
+  // 如果是服务器主动断开，尝试重连
+  if (reason === 'io server disconnect') {
+    socket.connect();
+  }
 });
+
+// 监听服务器消息
+socket.on('message', (data) => {
+  console.log('收到消息:', data);
+  // 处理消息逻辑
+});
+
 ```
-<br>
 
-#### JSON消息格式与类型
-agent返回给前端的json格式，根据此信息进行增删改查和路由跳转处理
+#### 2、系统配置数据
+
 ```javascript
-// 返回的操作类型包括增删改查和页面路由跳转
+// 页面配置对象
+const pageConfig = {
+  code: 'cockpit',              // 页面唯一标识（必填）- Agent 用于识别页面
+  name: '驾驶舱',                // 页面中文名称（必填）- 显示给用户看
+  routePath: '/cockpit',        // 路由路径（必填）- Vue Router 路径
+  action: ['router', 'query'],  // 支持的操作类型（必填）- 该页面支持哪些操作
+  description: '系统总览页面',   // 页面描述（必填）- 告诉 Agent 这个页面是做什么的
+  children: [],                 // 子页面配置（可选）- 树形结构的子页面
+  examples: {},                 // 操作示例（可选）- 展示请求和响应格式
+  metadataConfig: {}            // 元数据配置（可选）- 需要获取元数据的页面使用
+};
+
+// 完整示例
+// 示例1: 简单页面配置（只支持路由跳转和查询）
 {
-  action: "操作类型",      // router/query/add/modify/delete
-  payload: {
-    type: "模块类型",      // page_module/setting_module
-    code: "页面代码",      // 如: video, pandect, carpark
-    // ...其他参数
-  },
-  wait_id: "等待ID"       // 可选，用于数据反馈
+  code: 'cockpit',
+  name: '驾驶舱',
+  routePath: '/cockpit',
+  action: ['router', 'query'],
+  description: '系统总览页面，展示系统的整体数据和状态'
 }
 
-//示例：
-//页面跳转
+// 示例2: 完整的 CRUD 页面配置（带操作示例）
 {
-  "action": "router",
-  "payload": {
-    "type": "page_module",
-    "code": "video"  //跳转到的页面
-  },
-  "wait_id": "optional-uuid"
-}
-//数据查询
-{
-  "action": "query",
-  "payload": {
-    "type": "page_module",
-    "code": "video",
-    "name": "大门监控"
-  },
-  "wait_id": "uuid-123"
-}
-//新增数据
-{
-  "action": "add",
-  "payload": {
-    "type": "setting_module",
-    "code": "video",
-    "form": {
-      "name": "新监控点",
-      "latitude": "30.123",
-      "longitude": "120.456"
+  code: 'engineeringlist',
+  name: '工程列表',
+  routePath: '/projects/list',
+  action: ['router', 'query', 'add', 'modify', 'delete'],
+  description: '工程列表管理，支持增删改查',
+  examples: {
+    query: {
+      description: '查询工程列表',
+      request: {
+        action: 'query',
+        payload: {
+          code: 'engineeringlist',
+          type: 'page_module',
+          query: { name: '工程1' }
+        }
+      },
+      response: {
+        message: '查询完成，找到 5 条工程记录',
+        data: { total: 5, list: [/* ... */] }
+      }
     }
-  },
-  "wait_id": "uuid-456"
+  }
 }
-//修改数据
+
+// 示例3: 需要元数据的页面配置
 {
-  "action": "modify",
-  "payload": {
-    "type": "page_module",
-    "code": "video",
-    "oldname": "原名称",
-    "form": {
-      "name": "新名称"
+  code: 'devicelist',
+  name: '设备列表',
+  routePath: '/device/list',
+  action: ['router', 'query', 'add', 'modify', 'delete', 'get_metadata'],
+  description: '设备列表管理，支持增删改查',
+  metadataConfig: {
+    action: 'get_metadata',
+    description: '获取表单字段映射关系，包括设备类型、监测类型、健康状态等下拉选项'
+  }
+}
+
+// 示例4: 带子页面的树形结构
+{
+  code: 'warnmanage',
+  name: '警情管理',
+  routePath: '/warning',
+  action: ['router'],
+  description: '警情管理模块',
+  children: [
+    {
+      code: 'warnoverview',
+      name: '警情总览',
+      routePath: '/warning/overview',
+      action: ['router'],
+      description: '警情信息总览'
+    },
+    {
+      code: 'warnmessage',
+      name: '警情消息',
+      routePath: '/warning/messages',
+      action: ['router', 'query'],
+      description: '警情消息列表'
     }
-  },
-  "wait_id": "uuid-789"
-}
-//删除数据
-{
-  "action": "delete",
-  "payload": {
-    "type": "page_module",
-    "code": "video",
-    "name": "要删除的名称"
-  },
-  "wait_id": "uuid-abc"
+  ]
 }
 ```
 
-#### 外部系统接收消息处理逻辑
+
+##### 📋 参数详细说明
+
+<table>
+<tr>
+<td width="30%">
+
+**1. `code` - 页面标识**
+
+</td>
+<td>
+
+- **类型**: `string`
+- **作用**: 页面的唯一标识符，Agent 通过这个 code 来定位页面
+- **示例**: `'cockpit'`, `'devicelist'`, `'engineeringlist'`
+
+</td>
+</tr>
+<tr>
+<td>
+
+**2. `name` - 页面名称**
+
+</td>
+<td>
+
+- **类型**: `string`
+- **作用**: 页面的中文显示名称，用于向用户展示
+- **示例**: `'驾驶舱'`, `'设备列表'`, `'工程列表'`
+
+</td>
+</tr>
+<tr>
+<td>
+
+**3. `routePath` - 路由路径**
+
+</td>
+<td>
+
+- **类型**: `string`
+- **作用**: Vue Router 的路由路径，用于页面跳转
+- **示例**: `'/cockpit'`, `'/device/list'`, `'/projects/list'`
+
+</td>
+</tr>
+<tr>
+<td>
+
+**4. `action` - 支持的操作**
+
+</td>
+<td>
+
+- **类型**: `string[]`
+- **作用**: 定义该页面支持哪些操作类型
+- **可选值**:
+  - `'router'` - 路由跳转
+  - `'query'` - 查询数据
+  - `'add'` - 新增数据
+  - `'modify'` - 修改数据
+  - `'delete'` - 删除数据
+  - `'get_metadata'` - 获取元数据（表单字段等映射数据）
+- **示例**: `['router', 'query']`, `['router', 'query', 'add', 'modify', 'delete']`
+
+</td>
+</tr>
+<tr>
+<td>
+
+**5. `description` - 页面描述**
+
+</td>
+<td>
+
+- **类型**: `string`
+- **作用**: 详细描述页面功能，帮助 Agent 理解页面用途
+- **示例**: `'系统总览页面，展示边坡监测的整体数据和状态'`
+
+</td>
+</tr>
+<tr>
+<td>
+
+**6. `children` - 子页面** *(可选)*
+
+</td>
+<td>
+
+- **类型**: `PageConfig[]`
+- **作用**: 树形结构的子页面配置，用于多级菜单
+- **示例**: 警情管理下有警情总览、警情消息等子页面
+
+</td>
+</tr>
+<tr>
+<td>
+
+**7. `examples` - 操作示例** *(可选)*
+
+</td>
+<td>
+
+- **类型**: `object`
+- **作用**: 展示每种操作的请求和响应格式，帮助 Agent 理解如何调用该页面的操作
+- **结构**:
+```javascript
+{
+  query: {
+    description: '操作说明',
+    request: { /* 请求格式 */ },
+    response: { /* 响应格式 */ }
+  },
+  add: { /* ... */ },
+  modify: { /* ... */ },
+  delete: { /* ... */ }
+}
+```
+
+</td>
+</tr>
+<tr>
+<td>
+
+**8. `metadataConfig` - 元数据配置** *(可选)*
+
+</td>
+<td>
+
+- **类型**: `object`
+- **作用**: 对于需要获取表单字段映射的页面（如下拉选项等数据），配置元数据获取说明
+- **示例**:
+```javascript
+{
+  action: 'get_metadata',
+  description: '获取表单字段映射关系，包括设备类型、监测类型等下拉选项'
+}
+```
+
+</td>
+</tr>
+</table>
+
+#### 3、聊天框/数字人 iframe 与主系统通信
+1、主系统向两个 iframe（聊天框和数字人）发送 socketId，绑定socketId。
+2、主系统控制数字人 iframe 的录音监听与播放讲话的中断
+
+```javascript
+// 1. 初始化
+const dhumanIframeRef = ref<HTMLIFrameElement>();
+const socketId = ref('socket-123'); //使用socket连接时保存的socketId
+const websocketUrl = ref('wss://example.com/ws');
+
+// 2. 监听iframe消息
+window.addEventListener('message', (event) => {
+  if (event.data.type === 'IFRAME_READY') {
+    // iframe准备好了，发送Socket数据
+    dhumanIframeRef.value.contentWindow.postMessage({
+      type: 'SOCKET_DATA',
+      data: {
+        socketId: socketId.value,
+        websocketUrl: websocketUrl.value
+      }
+    }, '*');
+  }
+
+  if (event.data.type === 'LISTENING_STATE_CHANGED') {
+    console.log('监听状态:', event.data.data.isListening);
+  }
+});
+
+// 3. 用户启动数字人时，启动监听
+function showDigitalHuman() {
+  dhumanIframeRef.value.contentWindow.postMessage({
+    type: 'CONTROL_LISTENING',
+    action: 'start'
+  }, '*');
+}
+
+// 4. 用户关闭数字人时，停止监听和讲话
+function hideDigitalHuman() {
+  dhumanIframeRef.value.contentWindow.postMessage({
+    type: 'CONTROL_LISTENING',
+    action: 'stop'
+  }, '*');
+
+  dhumanIframeRef.value.contentWindow.postMessage({
+    type: 'CONTROL_SPEAKING',
+    action: 'interrupt'
+  }, '*');
+}
+
+```
+
+##### 📋 消息类型速查表
+
+##### 主应用 → iframe
+
+| 消息类型 | 参数 | 说明 |
+|---------|------|------|
+| `CONTROL_LISTENING` | `action: 'start' \| 'stop'` | 控制录音监听 |
+| `CONTROL_SPEAKING` | `action: 'interrupt'` | 中断讲话 |
+| `SOCKET_DATA` | `{ socketId, websocketUrl }` | Socket连接信息 |
+
+##### iframe → 主应用
+
+| 消息类型 | 数据结构 | 说明 |
+|---------|---------|------|
+| `IFRAME_READY` | 无 | iframe准备就绪 |
+| `CHAT_INIT_COMPLETE` | 无 | 聊天框初始化完成 |
+| `DIGITAL_HUMAN_COMPLETION` | 无 | 数字人操作完成 |
+| `REQUEST_SOCKET_DATA` | 无 | 请求Socket数据 |
+| `LISTENING_STATE_CHANGED` | `{ isListening: boolean }` | 监听状态变化 |
+| `SPEAKING_STATE_CHANGED` | `{ isSpeaking: boolean }` | 讲话状态变化 |
+| `CONTROL_RESULT` | `{ action, success, message }` | 控制操作结果 |
+| `PONG` | 无 | 心跳响应 |
+
+
+#### 4、主系统接收 socket 控制消息处理
 ```javascript
 //路由跳转处理
 socket.on("message", (data) => {
@@ -640,7 +942,7 @@ methods: {
 }
 ```
 
-### 数据反馈机制
+### 请求数据操作反馈
 
 #### 1. wait_id 机制
 
@@ -716,43 +1018,6 @@ window.sendAgentResponse({
 window.sendAgentResponse({
   message: "删除操作完成",
   data: ""
-});
-```
-
-### 数字人集成
-
-#### 1. 数字人完成消息
-
-前端通过 `postMessage` 发送数字人完成消息：
-
-```javascript
-window.postMessage({
-  type: 'DIGITAL_HUMAN_COMPLETION',
-  wait_id: waitId,
-  completion_data: {
-    duration: 5000,  // 播放时长（毫秒）
-    status: 'completed',
-    message: '数字人讲话已完成'
-  }
-}, '*');
-```
-
-#### 2. WebSocket 监听并转发
-
-```javascript
-window.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'DIGITAL_HUMAN_COMPLETION') {
-    console.log("📥 收到数字人完成消息:", event.data);
-    
-    if (socket && socket.connected) {
-      socket.emit('digitalhuman_completion', {
-        wait_id: event.data.wait_id,
-        completion_data: event.data.completion_data
-      });
-      
-      console.log("📤 已通过socket发送数字人完成消息给后端");
-    }
-  }
 });
 ```
 
