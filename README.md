@@ -294,7 +294,7 @@ MCP (Model Context Protocol) 是一个标准的工具调用协议，允许 Agent
 | **数字人地址** | 数字人iframe地址（可选） | `https://dh.example.com/digitalhuman/628d9cfa1d6047549baead18dd81490` |
 | **聊天框地址** | 前端聊天界面iframe地址（可选） | `https://dh.example.com/chat/628d9cfa1d6047549baead18dd81490` |
 
-### 调用流程
+### 调用流程（Vue3 版本）
 
 #### 1、 初始化连接流程
 
@@ -760,266 +760,573 @@ function hideDigitalHuman() {
 
 
 #### 4、主系统接收 socket 控制消息处理
-```javascript
-//路由跳转处理
-socket.on("message", (data) => {
-  if (data.action === "router") {
-    if (data.payload.type === "page_module") {
-      const targetRouteName = data.payload.code;
-      
-      // 跳转页面
-      window.this.$refs.bottombar.getTo(targetRouteName);
-      window.this.$router.push({
-        name: targetRouteName
-      });
-      
-      // 标记页面加载状态
-      window.pageLoadingStatus = { [targetRouteName]: false };
-      
-      // 提示用户
-      setTimeout(() => {
-        window.this.$message.success("AI正在为你处理，已成功跳转相应页面");
-      }, 500);
-    }
-  }
-});
 
-//查询处理
-socket.on("message", (data) => {
-  if (data.action === "query") {
-    // 检查页面是否准备好
-    const checkPageReady = () => {
-      const targetCode = data.payload.code;
-      const isCurrentPage = window.this.$route.name === targetCode;
-      const isPageReady = window.pageLoadingStatus?.[targetCode];
-      
-      if (isCurrentPage && isPageReady) {
-        // 触发查询事件
-        window.this.$bus.$emit("query", data);
-      } else {
-        // 延迟重试
-        setTimeout(checkPageReady, 500);
-      }
-    };
-    
-    setTimeout(checkPageReady, 1500);
-  }
-});
-// 在页面组件中监听 query 事件
-mounted() {
-  this.$bus.$on("query", this.handleQuery);
-},
-methods: {
-  handleQuery(data) {
-    // 检查是否是当前页面
-    if (data.payload.code !== this.$route.name) return;
-    
-    // 设置搜索关键字
-    this.searchKey = data.payload.name;
-    
-    // 执行查询
-    this.onQuery();
-    
-    // 反馈结果
-    if (window.sessionStorage.getItem("wait_id")) {
-      setTimeout(() => {
-        window.sendAgentResponse({
-          message: "查询操作完成",
-          data: this.tableData  // 返回查询结果
-        });
-      }, 1000);
-    }
-  }
-}
+本节介绍如何在 Vue3 项目中接收和处理 Socket 控制消息。
 
-//新增处理
-methods: {
-  handleAdd(data) {
-    if (data.payload.code !== this.$route.name) return;
-    
-    // 打开新增表单
-    this.handleAdd();
-    
-    // 填充表单数据
-    setTimeout(() => {
-      this.form = data.payload.form || {};
-      
-      // 反馈结果
-      if (window.sessionStorage.getItem("wait_id")) {
-        setTimeout(() => {
-          window.sendAgentResponse({
-            message: "添加操作完成",
-            data: ""
-          });
-        }, 1000);
-      }
-    }, 1000);
-  }
-}
+##### 📐 架构说明
 
-//修改处理
-methods: {
-  handleModify(data) {
-    if (data.payload.code !== this.$route.name) return;
-    
-    // 先查询原记录
-    this.searchKey = data.payload.oldname;
-    this.onQuery();
-    
-    setTimeout(() => {
-      if (this.tableData.length === 0) return;
-      
-      // 打开编辑表单
-      let oldData = this.tableData[0];
-      this.editRow(oldData);
-      
-      // 更新表单数据
-      setTimeout(() => {
-        let newForm = data.payload.form;
-        Object.keys(newForm).forEach(key => {
-          if (this.form.hasOwnProperty(key)) {
-            this.form[key] = newForm[key];
-          }
-        });
-        
-        // 反馈结果
-        if (window.sessionStorage.getItem("wait_id")) {
-          setTimeout(() => {
-            window.sendAgentResponse({
-              message: "修改操作完成",
-              data: ""
-            });
-          }, 1000);
-        }
-      }, 1000);
-    }, 1000);
-  }
-}
+采用分层架构处理 Socket 消息:
 
-//删除处理
-methods: {
-  handleDelete(data) {
-    if (data.payload.code !== this.$route.name) return;
-    
-    // 先查询记录
-    this.searchKey = data.payload.name;
-    this.onQuery();
-    
-    setTimeout(() => {
-      if (this.tableData.length === 0) return;
-      
-      let oldData = this.tableData[0];
-      
-      // 弹出确认框
-      this.$confirm('确定删除这条数据吗？', '提示', {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning'
-      }).then(() => {
-        // 执行删除
-        this.delRow(oldData);
-        
-        // 反馈结果
-        if (window.sessionStorage.getItem("wait_id")) {
-          setTimeout(() => {
-            window.sendAgentResponse({
-              message: "删除操作完成",
-              data: ""
-            });
-          }, 1000);
-        }
-      }).catch(() => {
-        // 用户取消
-        if (window.sessionStorage.getItem("wait_id")) {
-          window.sendAgentResponse({
-            message: "删除操作取消",
-            data: ""
-          });
-        }
-      });
-    }, 1000);
-  }
-}
+```
+Socket.IO 服务器
+    ↓ (WebSocket 'message' 事件)
+Socket Manager (socket.ts)
+    ↓ (handleMessage 预处理)
+Event Bus (mitt)
+    ↓ (emitAgentEvent)
+页面组件 (Vue3 Composition API)
+    ↓ (onAgentEvent 监听)
+业务处理函数
 ```
 
-### 请求数据操作反馈
+##### 🔧 实现步骤
 
-#### 1. wait_id 机制
+**步骤 1: 创建 Socket 管理器**
 
-后端发送消息时会携带 `wait_id`，前端处理完成后需要通过此 ID 反馈结果。
+```typescript
+// socket/socket.ts
+import { io } from 'socket.io-client';
+import { emitAgentEvent } from './eventBus';
 
-```javascript
-// 保存 wait_id
-if (data.wait_id) {
-  window.sessionStorage.setItem("wait_id", data.wait_id);
-  window.sessionStorage.setItem("code", data.payload.code);
-}
-```
+class SocketManager {
+  private socket = null;
+  private router = null;
+  private pageReadyResolvers: Map<string, { resolve: () => void; timer: any }> = new Map();
 
-#### 2. 发送反馈
+  // 连接 Socket
+  connect(url: string) {
+    return new Promise((resolve) => {
+      this.socket = io(url, {
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionAttempts: 5,
+        reconnectionDelay: 3000,
+        timeout: 10000
+      });
 
-```javascript
-// 全局反馈方法
-window.sendAgentResponse = (responseData) => {
-  const waitId = window.sessionStorage.getItem("wait_id");
-  
-  if (waitId && window.socket && window.socket.connected) {
-    window.socket.emit('agent_response', {
+      // 连接成功
+      this.socket.on('connect', () => {
+        console.log('Socket 连接成功，ID:', this.socket.id);
+        resolve();
+      });
+
+      // 监听消息
+      this.socket.on('message', (data) => {
+        this.handleMessage(data);
+      });
+    });
+  }
+
+  // 处理消息
+  private async handleMessage(data) {
+    // router 操作特殊处理
+    if (data.action === 'router') {
+      this.handleRouter(data);
+      return;
+    }
+
+    // 对于非 router 操作，检查是否需要先跳转页面
+    const { payload } = data;
+    const targetCode = payload?.code;
+
+    if (targetCode && this.router) {
+      const currentRoute = this.router.currentRoute.value;
+      const currentRouteName = currentRoute.name;
+
+      // 如果当前路由不匹配，先跳转
+      if (currentRouteName !== targetCode) {
+        console.log(`当前路由 ${currentRouteName} 与目标页面 ${targetCode} 不匹配，先执行跳转`);
+        await this.handleRouteNavigation(data);
+      }
+    }
+
+    // 通过事件总线分发消息
+    emitAgentEvent('Agent:message', data);
+  }
+
+  // 路由跳转处理
+  private async handleRouter(data) {
+    const { payload, wait_id } = data;
+    const { code } = payload;
+
+    try {
+      // 执行路由跳转
+      await this.router.push({ name: code });
+      await this.router.isReady();
+
+      console.log(`路由跳转到 ${code} 成功`);
+
+      // 等待页面就绪
+      await this.waitForPageReady(code, 3000);
+
+      // 发送响应
+      if (wait_id) {
+        this.sendAgentResponse(wait_id, {
+          message: '已成功跳转到相应页面',
+          data: { code }
+        });
+      }
+    } catch (error) {
+      console.error('路由跳转失败:', error);
+      if (wait_id) {
+        this.sendAgentResponse(wait_id, {
+          message: `路由跳转失败: ${error.message}`,
+          data: null
+        });
+      }
+    }
+  }
+
+  // 执行路由导航（不发送响应）
+  private async handleRouteNavigation(data) {
+    const { payload } = data;
+    const { code } = payload;
+
+    try {
+      await this.router.push({ name: code });
+      await this.router.isReady();
+      await this.waitForPageReady(code, 2000);
+      console.log(`页面 ${code} 已就绪，可以执行后续操作`);
+    } catch (error) {
+      console.error('路由跳转失败:', error);
+    }
+  }
+
+  // 发送响应
+  sendAgentResponse(waitId: string, responseData: any) {
+    if (!this.socket?.connected) {
+      console.warn('Socket 未连接，无法发送响应');
+      return;
+    }
+
+    this.socket.emit('agent_response', {
       wait_id: waitId,
       response_data: responseData
     });
-    
-    console.log("📤 已发送数据反馈给后端:", responseData);
-    
-    // 清除缓存
-    window.sessionStorage.removeItem("wait_id");
-    window.sessionStorage.removeItem("code");
   }
-};
-```
 
-#### 3. 反馈数据格式
+  // 页面就绪通知
+  notifyPageReady(code: string) {
+    const resolver = this.pageReadyResolvers.get(code);
+    if (resolver) {
+      clearTimeout(resolver.timer);
+      this.pageReadyResolvers.delete(code);
+      resolver.resolve();
+      console.log(`页面 ${code} 已就绪`);
+    }
+  }
 
-```javascript
-{
-  message: "操作描述",
-  data: {
-    // 返回的数据，如查询结果
-  },
-  is_summarize: true  // 可选，是否需要总结
+  // 等待页面就绪
+  waitForPageReady(code: string, timeout = 5000): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        console.warn(`页面 ${code} 就绪等待超时，继续执行`);
+        this.pageReadyResolvers.delete(code);
+        resolve();
+      }, timeout);
+
+      this.pageReadyResolvers.set(code, { resolve, timer });
+    });
+  }
+}
+
+// 导出单例
+let socketManagerInstance: SocketManager | null = null;
+
+export async function initSocket(url: string, router: any) {
+  if (!socketManagerInstance) {
+    socketManagerInstance = new SocketManager();
+  }
+  socketManagerInstance.router = router;
+  await socketManagerInstance.connect(url);
+  return socketManagerInstance;
+}
+
+export function getSocketManager(): SocketManager {
+  if (!socketManagerInstance) {
+    throw new Error('Socket 未初始化，请先调用 initSocket()');
+  }
+  return socketManagerInstance;
 }
 ```
 
-#### 4. 使用示例
+**步骤 2: 创建事件总线**
 
-```javascript
-// 查询完成后反馈
-window.sendAgentResponse({
-  message: "查询操作完成",
-  data: {
-    total: 10,
-    list: [/* 查询结果 */]
+```typescript
+// eventBus.ts
+import mitt from 'mitt';
+
+interface AgentMessage {
+  action: string;
+  payload: any;
+  wait_id?: string;
+}
+
+type AgentEvents = {
+  'Agent:message': AgentMessage;
+};
+
+export const agentEventBus = mitt<AgentEvents>();
+
+export function emitAgentEvent<K extends keyof AgentEvents>(
+  event: K,
+  data: AgentEvents[K]
+): void {
+  agentEventBus.emit(event, data);
+}
+
+export function onAgentEvent<K extends keyof AgentEvents>(
+  event: K,
+  handler: (data: AgentEvents[K]) => void
+): () => void {
+  agentEventBus.on(event, handler);
+  return () => agentEventBus.off(event, handler);
+}
+```
+
+**步骤 3: 页面组件中监听消息**
+
+```vue
+<script setup lang="ts">
+import { onMounted, onUnmounted, ref } from 'vue';
+import { onAgentEvent } from '@/socket/eventBus';
+import { getSocketManager } from '@/socket/socket';
+import type { AgentMessage } from '@/socket/types';
+
+// 表格 API 引用（根据实际项目调整）
+const gridApi = ref<any>(null);
+const formDrawerApi = ref<any>(null);
+
+// 监听取消函数
+let unsubscribeAgent: (() => void) | null = null;
+
+onMounted(() => {
+  // 监听 Agent 消息
+  unsubscribeAgent = onAgentEvent('Agent:message', (message: AgentMessage) => {
+    // 1. 过滤消息 - 只处理当前页面（根据实际页面 code 修改）
+    if (message.payload?.code !== 'devicelist') {
+      return;
+    }
+
+    console.log('[Agent] 收到消息:', message);
+
+    // 2. 根据 action 分发到对应处理函数
+    switch (message.action) {
+      case 'query':
+        handleAgentQuery(message);
+        break;
+      case 'add':
+        handleAgentAdd(message);
+        break;
+      case 'modify':
+        handleAgentModify(message);
+        break;
+      case 'delete':
+        handleAgentDelete(message);
+        break;
+      case 'get_metadata':
+        handleAgentGetMetadata(message);
+        break;
+      default:
+        console.warn('[Agent] 未知的操作类型:', message.action);
+    }
+  });
+
+  // 通知 Socket 管理器页面已就绪
+  try {
+    getSocketManager().notifyPageReady('devicelist');
+  } catch (error) {
+    console.warn('[Agent] Socket 未初始化，跳过页面就绪通知');
   }
 });
 
-// 新增完成后反馈
-window.sendAgentResponse({
-  message: "添加操作完成",
-  data: ""
+onUnmounted(() => {
+  // 清理监听器，防止内存泄漏
+  if (unsubscribeAgent) {
+    unsubscribeAgent();
+  }
 });
 
-// 修改完成后反馈
-window.sendAgentResponse({
-  message: "修改操作完成",
-  data: ""
-});
+// ==================== 业务处理函数 ====================
 
-// 删除完成后反馈
-window.sendAgentResponse({
-  message: "删除操作完成",
-  data: ""
-});
+/**
+ * 查询处理
+ */
+const handleAgentQuery = async (message: AgentMessage) => {
+  const { payload, wait_id } = message;
+
+  try {
+    console.log('[Agent Query] 收到查询请求:', message);
+
+    // 构建查询条件
+    const formData: any = {};
+
+    if (payload.query) {
+      // 如果是查询所有数据
+      if (payload.query.dataType === 'all') {
+        console.log('[Agent Query] 查询所有数据');
+      } else {
+        // 根据具体字段构建查询条件
+        if (payload.query.name) {
+          formData.name = payload.query.name;
+        }
+        if (payload.query.type_id !== undefined) {
+          formData.type_id = payload.query.type_id;
+        }
+        // ... 其他查询字段
+      }
+    }
+
+    console.log('[Agent Query] 查询条件:', formData);
+
+    // 执行查询
+    await gridApi.value.query(formData);
+
+    // 获取查询结果
+    const tableData = gridApi.value.grid?.getTableData?.()?.fullData || [];
+
+    console.log('[Agent Query] 查询结果:', tableData.length, '条记录');
+
+    // 发送响应
+    if (wait_id) {
+      getSocketManager().sendAgentResponse(wait_id, {
+        message: `查询完成，找到 ${tableData.length} 条记录`,
+        data: {
+          total: tableData.length,
+          list: tableData.slice(0, 20) // 只返回前20条，优化性能
+        },
+        is_summarize: true
+      });
+    }
+  } catch (error) {
+    console.error('[Agent Query] 错误:', error);
+    if (wait_id) {
+      getSocketManager().sendAgentResponse(wait_id, {
+        message: `查询失败: ${error instanceof Error ? error.message : '未知错误'}`,
+        data: null
+      });
+    }
+  }
+};
+
+/**
+ * 新增处理
+ */
+const handleAgentAdd = async (message: AgentMessage) => {
+  const { payload, wait_id } = message;
+
+  try {
+    console.log('[Agent Add] 收到新增请求:', message);
+
+    // 处理表单数据
+    const formData = payload.form ? { ...payload.form } : {};
+
+    // 打开新增表单并填充数据
+    formDrawerApi.value.setData(formData).open();
+
+    // 发送响应
+    if (wait_id) {
+      setTimeout(() => {
+        getSocketManager().sendAgentResponse(wait_id, {
+          message: '已打开新增表单，请确认后提交',
+          data: payload.form
+        });
+      }, 500);
+    }
+  } catch (error) {
+    console.error('[Agent Add] 错误:', error);
+    if (wait_id) {
+      getSocketManager().sendAgentResponse(wait_id, {
+        message: `新增失败: ${error instanceof Error ? error.message : '未知错误'}`,
+        data: null
+      });
+    }
+  }
+};
+
+/**
+ * 修改处理
+ */
+const handleAgentModify = async (message: AgentMessage) => {
+  const { payload, wait_id } = message;
+
+  try {
+    console.log('[Agent Modify] 收到修改请求:', message);
+
+    // 1. 先查询原记录
+    const queryFormData: any = { name: payload.oldname };
+    console.log('[Agent Modify] 查询条件:', queryFormData);
+
+    await gridApi.value.query(queryFormData);
+
+    const tableData = gridApi.value.grid?.getTableData?.()?.fullData || [];
+    console.log('[Agent Modify] 查询结果:', tableData.length, '条记录');
+
+    if (tableData.length === 0) {
+      throw new Error(`未找到记录: ${payload.oldname}`);
+    }
+
+    const oldData = tableData[0];
+    console.log('[Agent Modify] 找到记录:', oldData);
+
+    // 2. 合并旧数据和新数据
+    const formData = payload.form ? { ...payload.form } : {};
+    const mergedData = { ...oldData, ...formData };
+
+    console.log('[Agent Modify] 合并后的数据:', mergedData);
+
+    // 3. 打开编辑表单
+    formDrawerApi.value.setData(mergedData).open();
+
+    // 4. 发送响应
+    if (wait_id) {
+      getSocketManager().sendAgentResponse(wait_id, {
+        message: `已找到记录"${oldData.name}"，准备修改`,
+        data: {
+          found: true,
+          oldData: oldData,
+          newData: mergedData,
+          changes: payload.form
+        },
+        is_summarize: true
+      });
+    }
+  } catch (error) {
+    console.error('[Agent Modify] 错误:', error);
+    if (wait_id) {
+      getSocketManager().sendAgentResponse(wait_id, {
+        message: `修改失败: ${error instanceof Error ? error.message : '未知错误'}`,
+        data: null
+      });
+    }
+  }
+};
+
+/**
+ * 删除处理
+ */
+const handleAgentDelete = async (message: AgentMessage) => {
+  const { payload, wait_id } = message;
+
+  try {
+    console.log('[Agent Delete] 收到删除请求:', message);
+
+    // 1. 查询记录
+    const formData: any = { name: payload.name };
+    await gridApi.value.query(formData);
+
+    const tableData = gridApi.value.grid?.getTableData?.()?.fullData || [];
+    if (tableData.length === 0) {
+      throw new Error(`未找到记录: ${payload.name}`);
+    }
+
+    // 2. 触发删除确认对话框
+    const targetData = tableData[0];
+    handleDelete(targetData); // 调用原有的删除方法
+
+    // 3. 发送响应
+    if (wait_id) {
+      setTimeout(() => {
+        getSocketManager().sendAgentResponse(wait_id, {
+          message: '已触发删除确认对话框',
+          data: { name: targetData.name }
+        });
+      }, 500);
+    }
+  } catch (error) {
+    console.error('[Agent Delete] 错误:', error);
+    if (wait_id) {
+      getSocketManager().sendAgentResponse(wait_id, {
+        message: `删除失败: ${error instanceof Error ? error.message : '未知错误'}`,
+        data: null
+      });
+    }
+  }
+};
+
+/**
+ * 获取元数据处理（可选）
+ */
+const handleAgentGetMetadata = (message: AgentMessage) => {
+  const { wait_id } = message;
+
+  try {
+    console.log('[Agent Metadata] 收到获取元数据请求:', message);
+
+    // 返回表单字段映射关系
+    const metadata = {
+      // 下拉选项数据
+      deviceTypes: deviceTypeOptions.value,
+      healthStates: getHealthStateOptions(),
+      // ... 其他元数据
+    };
+
+    const fieldDescriptions = {
+      name: '名称（必填，文本）',
+      type_id: '类型ID（必填，数字）',
+      // ... 其他字段说明
+    };
+
+    if (wait_id) {
+      getSocketManager().sendAgentResponse(wait_id, {
+        message: '已获取表单映射关系',
+        data: {
+          metadata,
+          fieldDescriptions
+        }
+      });
+    }
+  } catch (error) {
+    console.error('[Agent Metadata] 错误:', error);
+    if (wait_id) {
+      getSocketManager().sendAgentResponse(wait_id, {
+        message: `获取元数据失败: ${error instanceof Error ? error.message : '未知错误'}`,
+        data: null
+      });
+    }
+  }
+};
+
+// 原有的删除方法（示例）
+const handleDelete = (row: any) => {
+  // 弹出确认对话框并执行删除
+  // 实际实现根据项目调整
+};
+</script>
 ```
+
+##### 📊 消息数据结构
+
+```typescript
+interface AgentMessage {
+  action: 'query' | 'add' | 'modify' | 'delete' | 'router' | 'get_metadata';
+  payload: {
+    code: string;           // 页面标识
+    type?: string;          // 模块类型
+    query?: any;            // 查询条件
+    form?: any;             // 表单数据
+    oldname?: string;       // 修改时的旧名称
+    name?: string;          // 删除时的名称
+  };
+  wait_id?: string;         // 响应ID
+}
+
+// 响应数据格式
+interface AgentResponse {
+  message: string;          // 操作结果描述
+  data: any;                // 返回的数据
+  is_summarize?: boolean;   // 是否需要 AI 总结
+}
+```
+
+##### ✅ 关键要点
+
+1. **消息过滤**: 必须检查 `message.payload?.code` 是否匹配当前页面，避免处理其他页面的消息
+2. **清理监听**: 在 `onUnmounted` 中调用 `unsubscribe()` 防止内存泄漏
+3. **页面就绪**: 调用 `notifyPageReady()` 确保页面准备好接收消息
+4. **错误处理**: 所有处理函数都要 try-catch 并发送错误响应
+5. **异步等待**: 查询操作需要等待数据加载完成再发送响应
+
 
 ## 🤝交流与社区
 
